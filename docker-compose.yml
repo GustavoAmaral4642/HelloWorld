@@ -1,0 +1,98 @@
+services:
+  # Banco de dados MySQL 5.7
+  db:
+    image: mysql:5.7
+    container_name: killbill-db
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password --skip-name-resolve --bind-address=0.0.0.0
+    environment:
+      MYSQL_ROOT_PASSWORD: 4642941    # Senha do root
+      MYSQL_DATABASE: killbill         # banco killbill
+      MYSQL_USER: killbill             # user killbill
+      MYSQL_PASSWORD: killbill         # Senha do user killbill
+    volumes:
+      - killbill-db-data:/var/lib/mysql
+      - ./sql_script/official:/docker-entrypoint-initdb.d
+    ports:
+      - "3308:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ukillbill", "-pkillbill"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - killbill-network
+
+  # Kill Bill com o plugin Hello World (Java 11)
+  killbill:
+    image: killbill/killbill:0.24.0
+    container_name: killbill-app
+    environment:
+      # Configuração do banco de dados
+      KILLBILL_DAO_URL: jdbc:mysql://db:3306/killbill?createDatabaseIfNotExist=true&useSSL=false
+      KILLBILL_DAO_USER: killbill
+      KILLBILL_DAO_PASSWORD: killbill
+
+      # Modo de teste
+      KILLBILL_SERVER_TEST_MODE: "true"
+      KILLBILL_QUEUE_CREATOR_NAME: "killbill"
+      KILLBILL_BILLING_OSGI_DAO_INITIALIZE: "true"
+      KILLBILL_DAO_INITIALIZE: "true"
+
+      # Java 11 - Configurações JVM otimizadas
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+      CATALINA_OPTS: "-Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      JAVA_OPTS: "-Djava.version=11 -Djava.security.egd=file:/dev/./urandom"
+    ports:
+      - "8080:8080"    # API do Kill Bill
+    volumes:
+      - ./target/hello-world-plugin-2.0.1-SNAPSHOT.jar:/var/lib/killbill/bundles/plugins/java/hello-world/2.0.1-SNAPSHOT/hello-world-plugin-2.0.1-SNAPSHOT.jar
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/1.0/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - killbill-network
+
+  # Kaui - Interface Web
+  kaui:
+    image: killbill/kaui:2.0.11
+    container_name: kaui-app
+    environment:
+      KAUI_CONFIG_DAO_URL: jdbc:mysql://db:3306/kaui
+      KAUI_CONFIG_DAO_USER: killbill
+      KAUI_CONFIG_DAO_PASSWORD: killbill
+      KAUI_KILLBILL_URL: http://killbill:8080
+      KAUI_DISABLE_SIGN_UP_LINK: false
+      # Modo demo para autenticação local simplificada
+      KAUI_DEMO_MODE: true
+      # Credenciais padrão Kill Bill API
+      KAUI_KILLBILL_API_KEY: bob
+      KAUI_KILLBILL_API_SECRET: lazar
+    ports:
+      - "3000:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      killbill:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/users/sign_in"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - killbill-network
+
+networks:
+  killbill-network:
+    driver: bridge
+
+volumes:
+  killbill-db-data:
+    driver: local
